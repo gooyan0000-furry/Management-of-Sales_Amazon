@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import plotly.express as px
 import streamlit as st
 
 st.set_page_config(page_title="Amazon | The Discount Paradox", page_icon="🛍️", layout="wide")
@@ -81,26 +82,77 @@ st.markdown(f"**Decision signal:** {share} of deeply discounted products have a 
             f"and enter the investigation queue. These are exploratory screening rules, not confirmed defects.")
 
 st.markdown("### 01 / Is the ‘bigger discount = happier customer’ assumption true?")
-st.caption("Each dot is one product. Color shows rating risk; larger dots have more recorded ratings. Association is not causation.")
-plot = view.dropna(subset=["count_n"])
-fig, ax = plt.subplots(figsize=(11, 4.4))
-fig.patch.set_facecolor("#FAF9F6")
-ax.set_facecolor("#FFFFFF")
+st.caption("Hover over a dot (or tap it on mobile) to see its product name, price, discount, rating, and rating count. Dot size reflects rating count; correlation is not causation.")
+plot = view.dropna(subset=["count_n", "discount_n", "rating_n"]).copy()
 if not plot.empty:
-    sizes = 18 + 85 * np.sqrt(plot["count_n"].clip(lower=0) / max(plot["count_n"].max(), 1))
-    good = plot[~plot["weak"]]
-    bad = plot[plot["weak"]]
-    ax.scatter(good["discount_n"], good["rating_n"], s=sizes.loc[good.index], color="#139C95", alpha=.42, edgecolor="none", label="Rating ≥ 3.8")
-    ax.scatter(bad["discount_n"], bad["rating_n"], s=sizes.loc[bad.index], color="#EA7457", alpha=.65, edgecolor="none", label="Rating < 3.8")
-ax.axvline(DEEP, ls="--", c="#E9A837", lw=1.8, label="60% deep-deal rule")
-ax.axhline(LOW, ls=":", c="#8B76B9", lw=1.8, label="3.8 low-rating rule")
-ax.set(xlabel="Advertised discount (%)", ylabel="Average star rating", xlim=(0, 100), ylim=(1, 5.1))
-ax.grid(alpha=.15)
-ax.spines[["top", "right"]].set_visible(False)
-ax.legend(loc="lower left", ncol=2, fontsize=9, frameon=False)
-fig.tight_layout()
-st.pyplot(fig, use_container_width=True)
-plt.close(fig)
+    plot["Rating band"] = np.where(plot["weak"], "Below 3.8 · Check", "3.8 or higher")
+    plot["Product"] = plot["product_name"].fillna("Unnamed product").str.slice(0, 110)
+    plot["Price (₹)"] = plot["price_n"]
+    plot["Rating count"] = plot["count_n"].astype(int)
+    plot["Discount (%)"] = plot["discount_n"]
+    plot["Star rating"] = plot["rating_n"]
+    # A square-root scale keeps very heavily reviewed products from obscuring everything else.
+    plot["Bubble size"] = np.sqrt(plot["count_n"].clip(lower=0) + 1)
+    scatter = px.scatter(
+        plot, x="Discount (%)", y="Star rating", color="Rating band",
+        size="Bubble size", size_max=18,
+        color_discrete_map={"Below 3.8 · Check": "#EA7457", "3.8 or higher": "#139C95"},
+        custom_data=["Product", "Price (₹)", "Rating count", "product_id"],
+        labels={"Rating band": "Customer-rating group"},
+        category_orders={"Rating band": ["3.8 or higher", "Below 3.8 · Check"]},
+        opacity=0.67,
+    )
+    scatter.update_traces(
+        hovertemplate=("<b>%{customdata[0]}</b><br>Discount: %{x:.0f}%"
+                       "<br>Rating: %{y:.1f} / 5"
+                       "<br>Current price: ₹%{customdata[1]:,.0f}"
+                       "<br>Rating count: %{customdata[2]:,}"
+                       "<br>Product ID: %{customdata[3]}<extra></extra>"),
+        marker=dict(line=dict(width=0)),
+    )
+    scatter.add_vline(x=DEEP, line_dash="dash", line_color="#E9A837", line_width=2)
+    scatter.add_hline(y=LOW, line_dash="dot", line_color="#8B76B9", line_width=2)
+    scatter.update_layout(
+        height=480, plot_bgcolor="#FFFFFF", paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#293244"), legend=dict(orientation="h", y=-0.24, x=0),
+        margin=dict(l=10, r=10, t=12, b=60),
+        hoverlabel=dict(bgcolor="white", font_size=13, font_color="#293244"),
+    )
+    scatter.update_xaxes(range=[0, 100], showgrid=True, gridcolor="#EFEFEF", title="Advertised discount (%)")
+    scatter.update_yaxes(range=[1, 5.1], showgrid=True, gridcolor="#EFEFEF", title="Average star rating")
+    st.plotly_chart(scatter, use_container_width=True, config={"displayModeBar": True, "scrollZoom": False})
+else:
+    st.info("No products with valid ratings, discounts, and review counts in this selection.")
+
+st.markdown("#### 🏆 Best 10 and ⚠️ Worst 10 rated products")
+st.caption("Rankings use the current category filter and require at least the selected minimum rating count. High/low refers to customer star ratings, not product value or verified quality. Ties are broken by rating count.")
+ranked = view.dropna(subset=["rating_n", "count_n"]).copy()
+ranked = ranked[ranked["count_n"] >= min_evidence]
+
+def product_ranking_table(frame):
+    if frame.empty:
+        return pd.DataFrame(columns=["Product", "Rating ★", "Rating count", "Discount (%)", "Current price (₹)", "Product link"])
+    out = frame[["product_name", "rating_n", "count_n", "discount_n", "price_n", "product_link"]].copy()
+    out.columns = ["Product", "Rating ★", "Rating count", "Discount (%)", "Current price (₹)", "Product link"]
+    out["Product"] = out["Product"].fillna("Unnamed product").str.slice(0, 85)
+    return out
+
+rank_columns = {
+    "Product link": st.column_config.LinkColumn("Product link", display_text="Open product ↗"),
+    "Rating ★": st.column_config.NumberColumn("Rating ★", format="%.1f"),
+    "Discount (%)": st.column_config.NumberColumn("Discount (%)", format="%.0f%%"),
+    "Rating count": st.column_config.NumberColumn("Rating count", format="%d"),
+    "Current price (₹)": st.column_config.NumberColumn("Current price (₹)", format="₹%.0f"),
+}
+if ranked.empty:
+    st.info("No products meet the selected minimum rating-count threshold. Try a smaller threshold.")
+else:
+    best = ranked.sort_values(["rating_n", "count_n"], ascending=[False, False]).head(10)
+    worst = ranked.sort_values(["rating_n", "count_n"], ascending=[True, False]).head(10)
+    st.markdown("**Top 10 · Highest customer ratings**")
+    st.dataframe(product_ranking_table(best), hide_index=True, use_container_width=True, column_config=rank_columns)
+    st.markdown("**Bottom 10 · Lowest customer ratings**")
+    st.dataframe(product_ranking_table(worst), hide_index=True, use_container_width=True, column_config=rank_columns)
 
 st.markdown("### 02 / Which category has the most questionable deep deals?")
 st.caption("Compare the share of deeply discounted listings with low ratings within each category; minimum 15 deeply discounted products for comparison.")
