@@ -55,16 +55,30 @@ view["deep"] = view["discount_n"] >= DEEP
 view["weak"] = view["rating_n"] < LOW
 view["priority"] = view["deep"] & view["weak"] & (view["count_n"].fillna(0) >= min_evidence)
 
-st.markdown("### The question: are deep discounts hiding weak customer experience?")
+st.markdown("### At a glance · Traditional product indicators")
 k1, k2, k3 = st.columns(3)
-k1.metric("Typical advertised discount", f"{view['discount_n'].median():.0f}%" if len(view) else "—",
-          help="Median displayed discount percentage, not realized savings.")
+k1.metric("Products in selection", f"{len(view):,}", help="Unique product listings with usable rating and discount values.")
+k2.metric("Average current price", f"₹{view['price_n'].mean():,.0f}" if view['price_n'].notna().any() else "—", help="Mean listed discounted price; not sales or realized revenue.")
+k3.metric("Average customer rating", f"{view['rating_n'].mean():.2f} / 5" if len(view) else "—", help="Unweighted average of product-level star ratings.")
+
+with st.expander("📋 More traditional indicators · Product summary"):
+    summary = pd.DataFrame({
+        "Indicator": ["Median advertised discount", "Total recorded rating counts", "Median listed price", "Products with a deep discount (≥60%)"],
+        "Value": [f"{view['discount_n'].median():.1f}%" if len(view) else "—",
+                  f"{view['count_n'].fillna(0).sum():,.0f}",
+                  f"₹{view['price_n'].median():,.0f}" if view['price_n'].notna().any() else "—",
+                  f"{int(view['deep'].sum()):,}"],
+        "Interpretation": ["Listed discount, not verified savings", "Number of ratings, NOT sales volume", "Typical listed discounted price", "Count of listings meeting the working discount rule"]
+    })
+    st.dataframe(summary, hide_index=True, use_container_width=True)
+
+st.markdown("### Beyond the basics · Three questions worth investigating")
 deep_count = int(view["deep"].sum())
 weak_deep = int((view["deep"] & view["weak"]).sum())
-k2.metric("Weak-rating share among deep deals", f"{weak_deep/deep_count:.1%}" if deep_count else "—",
-          help="Share rated below 3.8 among listings with advertised discount ≥60%.")
-k3.metric("Deals needing investigation", f"{view['priority'].sum():,}",
-          help=f"Discount ≥60%, rating <3.8, and at least {min_evidence:,} recorded ratings.")
+share = f"{weak_deep / deep_count:.1%}" if deep_count else "not measurable"
+st.markdown(f"**Decision signal:** {share} of deeply discounted products have a rating below {LOW}; "
+            f"**{int(view['priority'].sum()):,} listings** also meet the review-evidence threshold "
+            f"and enter the investigation queue. These are exploratory screening rules, not confirmed defects.")
 
 st.markdown("### 01 / Is the ‘bigger discount = happier customer’ assumption true?")
 st.caption("Each dot is one product. Color shows rating risk; larger dots have more recorded ratings. Association is not causation.")
@@ -115,7 +129,7 @@ if not agg.empty:
 else:
     st.info("Too few deeply discounted products to make a stable category comparison in this selection.")
 
-st.markdown("### Investigation queue · Which listings should we check first?")
+st.markdown("### 03 / Which listings should we investigate first?")
 st.caption("Sorted by rating-count evidence, not sales. Investigate complaints, listing accuracy, and advertised reference prices before changing a price.")
 queue = view[view["priority"]].sort_values(["count_n", "rating_n"], ascending=[False, True]).head(15)
 if not queue.empty:
